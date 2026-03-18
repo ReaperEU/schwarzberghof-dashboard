@@ -1,143 +1,86 @@
-/**
- * Schwarzberghof Reservierungs-Server
- * Liest E-Mails via IMAP und stellt sie als API bereit
- */
-
-const http = require('http');
-const https = require('https');
-const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-const express    = require('express');
-const cors       = require('cors');
-const session    = require('express-session');
+const express = require('express');
+const cors = require('cors');
+const session = require('express-session');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Middleware ───────────────────────────────────────────
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(session({
-  secret: 'schwarzberghof-' + Math.random().toString(36),
+  secret: 'schwarzberghof-secret-2024',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 8 * 60 * 60 * 1000 } // 8 Stunden
+  cookie: { maxAge: 8 * 60 * 60 * 1000 }
 }));
-
-// Static files (das Dashboard HTML)
 app.use(express.static(path.join(__dirname)));
 
-// ── In-Memory Cache ──────────────────────────────────────
 let reservationCache = {};
 let lastFetch = {};
 
-// ── IMAP E-Mail Abruf ────────────────────────────────────
-async function fetchReservations(email, password) {
-  const cacheKey = email;
-  const now = Date.now();
-  
-  // Cache für 5 Minuten
-  if (reservationCache[cacheKey] && (now - lastFetch[cacheKey]) < 5 * 60 * 1000) {
-    return reservationCache[cacheKey];
-  }
+function deduplicateReservations(reservations) {
+  const seen = new Map();
+  return reservations.filter(r => {
+    const key = `${r.firstName.toLowerCase()}-${r.lastName.toLowerCase()}-${r.date}-${r.time}`;
+    if (seen.has(key)) return false;
+    seen.set(key, true);
+    return true;
+  });
+}
 
+async function fetchReservations(email, password) {
+  const now = Date.now();
+  if (reservationCache[email] && (now - lastFetch[email]) < 5 * 60 * 1000) {
+    return reservationCache[email];
+  }
   const client = new ImapFlow({
-    host: 'mail.biohost.de',
-    port: 993,
-    secure: true,
-    auth: { user: email, pass: password },
-    logger: false,
+    host: 'mail.biohost.de', port: 993, secure: true,
+    auth: { user: email, pass: password }, logger: false,
     tls: { rejectUnauthorized: false }
   });
-
   const reservations = [];
-
   try {
     await client.connect();
     const lock = await client.getMailboxLock('INBOX');
-
     try {
-      // Alle E-Mails suchen (oder nach Betreff filtern)
       const messages = client.fetch('1:*', { envelope: true, source: true });
-
       for await (const msg of messages) {
         try {
           const subject = msg.envelope.subject || '';
-          
-          // Nur Reservierungs-E-Mails verarbeiten
-          if (!subject.toLowerCase().includes('reservier') && 
+          if (!subject.toLowerCase().includes('reservier') &&
               !subject.toLowerCase().includes('tisch') &&
-              !subject.toLowerCase().includes('booking')) {
-            continue;
-          }
-
+              !subject.toLowerCase().includes('booking')) continue;
           const parsed = await simpleParser(msg.source);
           const body = parsed.text || parsed.html || '';
-          
-          // Parse Reservierungsdaten aus dem E-Mail-Body
           const reservation = parseReservationEmail(body, msg.envelope, msg.uid);
-          if (reservation) {
-            reservations.push(reservation);
-          }
-        } catch(msgErr) {
-          // Einzelne E-Mail-Fehler ignorieren
-        }
+          if (reservation) reservations.push(reservation);
+        } catch(e) {}
       }
-    } finally {
-      lock.release();
-    }
-
+    } finally { lock.release(); }
     await client.logout();
   } catch(err) {
     throw new Error('IMAP-Verbindung fehlgeschlagen: ' + err.message);
   }
-
-  // Cache speichern
-  reservationCache[cacheKey] = reservations;
-  lastFetch[cacheKey] = now;
-
-  return reservations;
+  const deduplicated = deduplicateReservations(reservations);
+  reservationCache[email] = deduplicated;
+  lastFetch[email] = now;
+  return deduplicated;
 }
 
-// ── E-Mail Parser ────────────────────────────────────────
 function parseReservationEmail(body, envelope, uid) {
-  // Bereinige HTML falls nötig
   const text = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
-
-  // Extrahiere Felder mit flexiblen Regex-Patterns
-  const dateMatch    = text.match(/Datumsauswahl[:\s]*(\d{4}-\d{2}-\d{2})/i) ||
-                       text.match(/Datum[:\s]*(\d{4}-\d{2}-\d{2})/i) ||
-                       text.match(/Date[:\s]*(\d{4}-\d{2}-\d{2})/i);
-  
-  const timeMatch    = text.match(/Uhrzeit[:\s]*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i) ||
-                       text.match(/Zeit[:\s]*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i) ||
-                       text.match(/Time[:\s]*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i);
-  
-  const paxMatch     = text.match(/Anzahl Personen[:\s]*(\d+)/i) ||
-                       text.match(/Personen[:\s]*(\d+)/i) ||
-                       text.match(/Guests?[:\s]*(\d+)/i) ||
-                       text.match(/Persons?[:\s]*(\d+)/i);
-  
-  const firstMatch   = text.match(/Vorname[:\s]*([^\s,\n]+)/i) ||
-                       text.match(/First\s*Name[:\s]*([^\s,\n]+)/i);
-  
-  const lastMatch    = text.match(/Nachname[:\s]*([^\s,\n]+)/i) ||
-                       text.match(/Last\s*Name[:\s]*([^\s,\n]+)/i) ||
-                       text.match(/Familienname[:\s]*([^\s,\n]+)/i);
-  
-  const phoneMatch   = text.match(/Telefon(?:nummer)?[:\s]*([\+\d\s\-\/\(\)]{7,20})/i) ||
-                       text.match(/Phone[:\s]*([\+\d\s\-\/\(\)]{7,20})/i) ||
-                       text.match(/Tel[:\s]*([\+\d\s\-\/\(\)]{7,20})/i);
-  
-  const emailMatch   = text.match(/E-?Mail(?:-Adresse)?[:\s]*([\w.\-+]+@[\w.\-]+\.\w+)/i) ||
-                       text.match(/([\w.\-+]+@[\w.\-]+\.\w+)/);
-
+  const dateMatch  = text.match(/Datumsauswahl[:\s]*(\d{4}-\d{2}-\d{2})/i) || text.match(/Datum[:\s]*(\d{4}-\d{2}-\d{2})/i);
+  const timeMatch  = text.match(/Uhrzeit[:\s]*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i) || text.match(/Zeit[:\s]*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)/i);
+  const paxMatch   = text.match(/Anzahl Personen[:\s]*(\d+)/i) || text.match(/Personen[:\s]*(\d+)/i) || text.match(/Guests?[:\s]*(\d+)/i);
+  const firstMatch = text.match(/Vorname[:\s]*([^\s,\n]+)/i);
+  const lastMatch  = text.match(/Nachname[:\s]*([^\s,\n]+)/i) || text.match(/Familienname[:\s]*([^\s,\n]+)/i);
+  const phoneMatch = text.match(/Telefon(?:nummer)?[:\s]*([\+\d\s\-\/\(\)]{7,20})/i) || text.match(/Tel[:\s]*([\+\d\s\-\/\(\)]{7,20})/i);
+  const emailMatch = text.match(/E-?Mail(?:-Adresse)?[:\s]*([\w.\-+]+@[\w.\-]+\.\w+)/i) || text.match(/([\w.\-+]+@[\w.\-]+\.\w+)/);
   if (!dateMatch && !firstMatch && !lastMatch) return null;
-
-  // Zeit normalisieren (12h → 24h)
   let timeStr = '00:00';
   if (timeMatch) {
     const raw = timeMatch[1].trim();
@@ -150,13 +93,9 @@ function parseReservationEmail(body, envelope, uid) {
     if (isAM && h === 12) h = 0;
     timeStr = `${String(h).padStart(2,'0')}:${m}`;
   }
-
-  const receivedDate = envelope.date ? 
-    new Date(envelope.date).toISOString().split('T')[0] : 
-    new Date().toISOString().split('T')[0];
-
+  const receivedDate = envelope.date ? new Date(envelope.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
   return {
-    id: `uid-${uid}-${Date.now()}`,
+    id: `uid-${uid}`,
     date: dateMatch ? dateMatch[1] : receivedDate,
     time: timeStr,
     pax: paxMatch ? parseInt(paxMatch[1]) : 2,
@@ -169,29 +108,13 @@ function parseReservationEmail(body, envelope, uid) {
   };
 }
 
-// ── API Routen ───────────────────────────────────────────
-
-// Login
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'E-Mail und Passwort erforderlich' });
-  }
-
+  if (!email || !password) return res.status(400).json({ error: 'E-Mail und Passwort erforderlich' });
   try {
-    // Test-Verbindung
-    const client = new ImapFlow({
-      host: 'mail.biohost.de',
-      port: 993,
-      secure: true,
-      auth: { user: email, pass: password },
-      logger: false,
-      tls: { rejectUnauthorized: false }
-    });
+    const client = new ImapFlow({ host: 'mail.biohost.de', port: 993, secure: true, auth: { user: email, pass: password }, logger: false, tls: { rejectUnauthorized: false } });
     await client.connect();
     await client.logout();
-
-    // Session speichern
     req.session.email = email;
     req.session.password = password;
     res.json({ success: true });
@@ -200,36 +123,21 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Logout
-app.post('/api/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
-});
+app.post('/api/logout', (req, res) => { req.session.destroy(); res.json({ success: true }); });
 
-// Auth-Check
 app.get('/api/me', (req, res) => {
-  if (req.session.email) {
-    res.json({ email: req.session.email });
-  } else {
-    res.status(401).json({ error: 'Nicht angemeldet' });
-  }
+  if (req.session.email) res.json({ email: req.session.email });
+  else res.status(401).json({ error: 'Nicht angemeldet' });
 });
 
-// Reservierungen abrufen
 app.get('/api/reservations', async (req, res) => {
-  if (!req.session.email) {
-    return res.status(401).json({ error: 'Nicht angemeldet' });
-  }
-
+  if (!req.session.email) return res.status(401).json({ error: 'Nicht angemeldet' });
   try {
     const reservations = await fetchReservations(req.session.email, req.session.password);
-    res.json({ reservations, count: reservations.length, cached: false });
-  } catch(err) {
-    res.status(500).json({ error: err.message });
-  }
+    res.json({ reservations, count: reservations.length });
+  } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// Cache leeren (für manuellen Refresh)
 app.post('/api/refresh', async (req, res) => {
   if (!req.session.email) return res.status(401).json({ error: 'Nicht angemeldet' });
   delete reservationCache[req.session.email];
@@ -237,18 +145,29 @@ app.post('/api/refresh', async (req, res) => {
   try {
     const reservations = await fetchReservations(req.session.email, req.session.password);
     res.json({ reservations, count: reservations.length });
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/send-email', async (req, res) => {
+  if (!req.session.email) return res.status(401).json({ error: 'Nicht angemeldet' });
+  const { to, type, reservation } = req.body;
+  const isConfirm = type === 'confirm';
+  const dateFormatted = new Date(reservation.date).toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  const subject = isConfirm
+    ? `Reservierungsbestätigung – ${dateFormatted} um ${reservation.time} Uhr`
+    : `Ihre Reservierungsanfrage – ${dateFormatted}`;
+  const text = isConfirm
+    ? `Sehr geehrte/r ${reservation.firstName} ${reservation.lastName},\n\nwir freuen uns, Ihre Reservierung für ${reservation.pax} Person(en) am ${dateFormatted} um ${reservation.time} Uhr zu bestätigen.\n\nWir freuen uns auf Ihren Besuch!\n\nHerzliche Grüße\nIhr Schwarzberghof-Team\nClaus & Nicole Brummer\nwww.schwarzberghof.eu`
+    : `Sehr geehrte/r ${reservation.firstName} ${reservation.lastName},\n\nleider müssen wir Ihre Reservierungsanfrage für den ${dateFormatted} um ${reservation.time} Uhr ablehnen, da wir zu diesem Zeitpunkt leider vollständig ausgebucht sind.\n\nWir würden uns freuen, Sie zu einem anderen Zeitpunkt bei uns begrüßen zu dürfen.\n\nHerzliche Grüße\nIhr Schwarzberghof-Team\nClaus & Nicole Brummer\nwww.schwarzberghof.eu`;
+  try {
+    const transporter = nodemailer.createTransport({ host: 'mail.biohost.de', port: 465, secure: true, auth: { user: req.session.email, pass: req.session.password } });
+    await transporter.sendMail({ from: `"Schwarzberghof" <${req.session.email}>`, to, subject, text });
+    res.json({ success: true });
   } catch(err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'E-Mail konnte nicht gesendet werden: ' + err.message });
   }
 });
 
-// Alle anderen Routen → Dashboard
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+app.get('*', (req, res) => { res.sendFile(path.join(__dirname, 'index.html')); });
 
-// ── Server starten ───────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n🏔  Schwarzberghof Dashboard läuft auf http://localhost:${PORT}`);
-  console.log(`   Öffne im Browser: http://localhost:${PORT}\n`);
-});
+app.listen(PORT, () => { console.log(`\n🏔  Schwarzberghof Dashboard läuft auf http://localhost:${PORT}\n`); });
