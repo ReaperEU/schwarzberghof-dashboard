@@ -365,10 +365,11 @@ main{padding:16px;max-width:1400px;margin:0 auto;padding-bottom:calc(env(safe-ar
     <h3 id="modal-title">Reservierung</h3>
     <div id="modal-content"></div>
     <div class="modal-actions">
-      <a id="modal-call" href="#" class="modal-btn gold">📞 Anrufen</a>
-      <a id="modal-mail" href="#" class="modal-btn">✉️ E-Mail</a>
-      <button class="modal-btn" onclick="closeModal()">✕</button>
-    </div>
+  <button class="modal-btn gold" onclick="sendConfirmEmail('confirm')">✅ Bestätigen</button>
+  <button class="modal-btn" style="border-color:rgba(192,57,43,0.4);color:#e74c3c" onclick="sendConfirmEmail('decline')">❌ Ablehnen</button>
+  <a id="modal-call" href="#" class="modal-btn">📞</a>
+  <button class="modal-btn" onclick="closeModal()">✕</button>
+</div>
   </div>
 </div>
 
@@ -688,6 +689,26 @@ function openModal(i) {
   document.getElementById('modal-mail').href='mailto:'+r.email;
   document.getElementById('modal-overlay').classList.add('open');
 }
+
+async function sendConfirmEmail(type) {
+  if (!currentRes) return;
+  const label = type === 'confirm' ? 'Bestätigung' : 'Ablehnung';
+  if (!confirm(`${label} an ${currentRes.email} senden?`)) return;
+  try {
+    const r = await fetch('/api/send-email', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: currentRes.email, type, reservation: currentRes })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    showToast(type === 'confirm' ? '✅ Bestätigung gesendet!' : '❌ Ablehnung gesendet!');
+    closeModal();
+  } catch(e) {
+    showToast('⚠️ ' + e.message);
+  }
+}  
+  
 function closeModal(e){
   if(!e||e.target===document.getElementById('modal-overlay'))
     document.getElementById('modal-overlay').classList.remove('open');
