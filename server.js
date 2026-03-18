@@ -8,20 +8,6 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-
-// ── Abhängigkeiten installieren falls nötig ──────────────
-function ensureDeps() {
-  const needed = ['imapflow', 'mailparser', 'express', 'cors', 'express-session'];
-  needed.forEach(pkg => {
-    try { require.resolve(pkg); }
-    catch(e) {
-      console.log(`📦 Installiere ${pkg}...`);
-      execSync(`npm install ${pkg} --save`, { stdio: 'inherit' });
-    }
-  });
-}
-ensureDeps();
-
 const express    = require('express');
 const cors       = require('cors');
 const session    = require('express-session');
