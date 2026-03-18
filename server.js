@@ -42,7 +42,7 @@ app.use(session({
 }));
 
 // Static files (das Dashboard HTML)
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname)));
 
 // ── In-Memory Cache ──────────────────────────────────────
 let reservationCache = {};
@@ -258,7 +258,7 @@ app.post('/api/refresh', async (req, res) => {
 
 // Alle anderen Routen → Dashboard
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // ── Server starten ───────────────────────────────────────
