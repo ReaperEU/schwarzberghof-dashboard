@@ -45,7 +45,7 @@ async function fetchReservations(email, password) {
   }
 
   const client = new ImapFlow({
-    host: 'sogo.biohost.de',
+    host: 'mail.biohost.de',
     port: 993,
     secure: true,
     auth: { user: email, pass: password },
@@ -181,7 +181,7 @@ app.post('/api/login', async (req, res) => {
   try {
     // Test-Verbindung
     const client = new ImapFlow({
-      host: 'sogo.biohost.de',
+      host: 'mail.biohost.de',
       port: 993,
       secure: true,
       auth: { user: email, pass: password },
