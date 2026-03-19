@@ -578,8 +578,13 @@ function renderHeatmap(){
     html+=`<div class="heatmap-label">${slot}</div>`;
     days.forEach((_,col)=>{
       const v=grid[row][col];
-      const bg=v===0?'var(--surface2)':`rgba(201,168,76,${.12+v/maxV*.7})`;
-      html+=`<div class="heatmap-cell" style="background:${bg}">${v||''}</div>`;
+      const intensity=v/maxV;
+      let bg,color;
+      if(v===0){bg='#f0efed';color='transparent';}
+      else if(intensity<0.4){bg='#e8dfc8';color='#6b6459';}
+      else if(intensity<0.7){bg='#c9a84c';color='#fff';}
+      else{bg='#7a6030';color='#fff';}
+      html+=`<div class="heatmap-cell" style="background:${bg};color:${color}">${v||''}</div>`;
     });
   });
   document.getElementById('heatmap').innerHTML=html;
