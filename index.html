@@ -353,11 +353,12 @@ main{padding:16px;max-width:1400px;margin:0 auto;padding-bottom:calc(env(safe-ar
     <h3 id="modal-title">Reservierung</h3>
     <div id="modal-content"></div>
     <div class="modal-actions">
-      <button class="modal-btn gold" onclick="sendConfirmEmail('confirm')">✅ Bestätigen</button>
-      <button class="modal-btn red" onclick="sendConfirmEmail('decline')">❌ Ablehnen</button>
-      <a id="modal-call" href="#" class="modal-btn">📞</a>
-      <button class="modal-btn" onclick="closeModal()">✕</button>
-    </div>
+  <button class="modal-btn gold" onclick="sendConfirmEmail('confirm')">✅ Bestätigen</button>
+  <button class="modal-btn red" onclick="sendConfirmEmail('decline')">❌ Ablehnen</button>
+  <a id="modal-call" href="#" class="modal-btn">📞 Anrufen</a>
+  <a id="modal-mail" href="#" class="modal-btn">✉️ E-Mail</a>
+  <button class="modal-btn" onclick="closeModal()">✕</button>
+</div>
   </div>
 </div>
 
@@ -566,7 +567,7 @@ function renderHeatmap(){
   const days=['Mo','Di','Mi','Do','Fr','Sa','So'];
   const slots=['12h','14h','16h','18h','20h'];
   const grid=Array(5).fill(null).map(()=>Array(7).fill(0));
-  allRes.forEach(r=>{
+  filteredRes.forEach(r=>{
     const d=new Date(r.date+'T'+r.time);
     const h=d.getHours(),dow=d.getDay()===0?6:d.getDay()-1;
     const row=h<13?0:h<15?1:h<17?2:h<19?3:4;
@@ -650,6 +651,7 @@ function openModal(i) {
     ['Eingegangen', r.receivedAt]
   ].map(([k,v])=>`<div class="modal-row"><span class="key">${k}</span><span class="val">${v}</span></div>`).join('');
   document.getElementById('modal-call').href='tel:'+r.phone.replace(/\s/g,'');
+  document.getElementById('modal-mail').href='mailto:'+r.email;  // ← neu
   document.getElementById('modal-overlay').classList.add('open');
 }
 
